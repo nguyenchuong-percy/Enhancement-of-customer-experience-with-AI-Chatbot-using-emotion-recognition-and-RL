@@ -14,7 +14,10 @@ import itertools
 import math
 import numpy as np
 from scipy.spatial import distance
-
+from bert_model import SentimentClassifier
+from pyvi import ViTokenizer
+from gensim.utils import simple_preprocess
+from transformers import get_linear_schedule_with_warmup, AutoTokenizer, AutoModel, logging
 from loss import mask_nll_loss
 from seq2seq import *
 from dataloading import *
@@ -24,6 +27,77 @@ from utils import *
 PAD_token = 0  # Used for padding short sentences
 SOS_token = 1  # Start-of-sentence token
 EOS_token = 2  # End-of-sentence token
+
+def test_kfold(inp, lengths, output, mask, max_target_len, n_splits = 3):
+    models = []
+    
+    # Load models for each fold
+    for fold in range(n_splits):
+        model = SentimentClassifier(n_classes=7)
+        model.to(device)
+        model.load_state_dict(torch.load(f'phobert_fold{fold+1}.pth'))
+        model.eval()
+        models.append(model)
+
+    texts = []
+    predicts = []
+    predict_probs = []
+    real_values = []
+    scores = []  # Store scores (probabilities)
+
+    # Loop over the input data directly (inp, output, mask, etc.)
+    total_samples = len(inp)
+    for i in range(total_samples):
+        # For each sample, get the respective input, output, and mask
+        input_ids = inp[i].unsqueeze(0).to(device)  # Add batch dimension
+        attention_mask = mask[i].unsqueeze(0).to(device)
+        targets = output[i].unsqueeze(0).to(device)
+
+        total_outs = []
+        
+        # Forward pass through all models (cross-validation folds)
+        for model in models:
+            with torch.no_grad():
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask
+                )
+                total_outs.append(outputs)
+
+        # Stack outputs from all folds and take the mean
+        total_outs = torch.stack(total_outs)
+        mean_outputs = total_outs.mean(0)
+
+        # Apply softmax to get probabilities
+        prob_scores = F.softmax(mean_outputs, dim=1)  # Probabilities for each class
+        scores.extend(prob_scores.cpu())  # Collect scores
+
+        # Get predicted class
+        _, pred = torch.max(prob_scores, dim=1)
+
+        # Collect results
+        texts.append("Text Sample")  # You can use the original text if available
+        predicts.append(pred.item())  # Convert tensor to scalar for predictions
+        predict_probs.append(prob_scores.cpu())
+        real_values.append(targets.item())  # Convert tensor to scalar for targets
+
+    # Convert lists to tensors and move them to CPU
+    predicts = torch.tensor(predicts).cpu()
+    predict_probs = torch.cat(predict_probs).cpu()  # Concatenate list of tensors
+    real_values = torch.tensor(real_values).cpu()
+    scores = torch.cat(scores).cpu()  # Final scores for each class
+
+    return real_values, predicts, scores
+
+def convert_response_to_text(response_tensor, tokenizer):
+    if response_tensor.dim() > 1:
+        response_tensor = response_tensor[:, 0]
+    
+    # Convert token IDs to text
+    text = tokenizer.decode(response_tensor, skip_special_tokens=True)
+    
+    return text
+
 
 
 def rl(input_variable, lengths, target_variable, mask, max_target_len, encoder, decoder, batch_size, teacher_forcing_ratio):
@@ -147,88 +221,132 @@ def semantic_coherence(input_variable, lengths, target_variable, mask, max_targe
         r3+= backward_loss / backward_len
     return r3
 
-l1=0.25
-l2=0.25
-l3=0.5
+l1=0.2
+l2=0.2
+l3=0.35
+l4=0.25
 
 dull_responses = ["i do not know what you are talking about.", "i do not know.", "you do not know.", "you know what i mean.", "i know what you mean.", "you know what i am saying.", "you do not know anything."]
 
 MIN_COUNT = 3
 MAX_LENGTH = 15
 
-def calculate_rewards(input_var, lengths, target_var, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder, batch_size, teacher_forcing_ratio):
-    #rewards per episode
+def load_model():
+    model = SentimentClassifier(n_classes=7)
+    model.to(device)
+    model.load_state_dict(torch.load(f'./bert_model/phobert_fold1.pth',map_location=device))
+    return model
+
+def load_tokenizer():
+    tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base", use_fast=False)
+    return tokenizer
+
+def infer(input,model, tokenizer, max_len=120):
+    text = convert_response_to_text(input, tokenizer)
+    print(f'Text: {text}')
+    text = ' '.join(simple_preprocess(text))
+    text = ViTokenizer.tokenize(text)
+
+    encoded_review = tokenizer.encode_plus(
+        text,
+        max_length=max_len,
+        truncation=True,
+        add_special_tokens=True,
+        padding='max_length',
+        return_attention_mask=True,
+        return_token_type_ids=False,
+        return_tensors='pt',
+    )
+    emotion_score = {
+    'Other': 0,            # Neutral or unclassified emotion
+    'Disgust': -0.7,       # Strong negative emotion
+    'Enjoyment': 0.8,      # Positive emotion
+    'Anger': -1,           # Strong negative emotion
+    'Surprise': 0.5,       # Neutral to positive, could go either way depending on context
+    'Sadness': -0.8,       # Negative emotion
+    'Fear': -0.6           # Negative emotion
+      }
+    class_names = list(emotion_score.keys())
+    input_ids = encoded_review['input_ids'].to(device)
+    attention_mask = encoded_review['attention_mask'].to(device)
+
+    output = model(input_ids, attention_mask)
+    _, y_pred = torch.max(output, dim=1)
+
+    print(f'Sentiment: {class_names[y_pred]}')
+    return emotion_score[class_names[y_pred]]
+
+def calculate_rewards(
+    input_var, lengths, target_var, mask, max_target_len,
+    forward_encoder, forward_decoder, backward_encoder, backward_decoder,
+    batch_size, teacher_forcing_ratio, tokenizer, model):
+    # Rewards per episode
     ep_rewards = []
-    #indice of current episode
+    # Episode counter
     ep_num = 1
-    #list of responses
+    # List of responses
     responses = []
-    #input of current episode
+    # Current input and target
     ep_input = input_var
-    #target of current episode
     ep_target = target_var
     
-    #ep_num bounded -> to redefine (MEDIUM POST)
-    while (ep_num <= 10):
+    while ep_num <= 10:
+        print(f"Episode: {ep_num}")
         
-        print(ep_num)
-        #generate current response with the forward model
-        _, _, curr_response = rl(ep_input, lengths, ep_target, mask, max_target_len, forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio)
+        # Generate current response using the forward model
+        _, _, curr_response = rl(
+            ep_input, lengths, ep_target, mask, max_target_len,
+            forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio
+        )
         
-        #Break if :
-        # 1 -> dull response
-        # 2 -> response is less than MIN_LENGTH
-        # 3 -> repetition ie curr_response in responses
-        if(len(curr_response) < MIN_COUNT):# or (curr_response in dull_responses) or (curr_response in responses)):
-            break
-            
-            
-        #We can add the response to responses list
-        #curr_response = torch.LongTensor(curr_response).view(-1, 1)
-        #transform curr_response size
-        #target = torch.zeros(960, 1)
-        #target[:15, :] = curr_response
-        #curr_response = target
-        #print(curr_response.size())
-        #curr_response = torch.reshape(curr_response, (15, 64))
-        #print(curr_response.size())
-        #curr_response = curr_response.to(device)
-        #responses.append(curr_response) 
+        # # Convert the response tensor to text for inference
+        # response_text = convert_response_to_text(curr_response, tokenizer)
         
+        # # Break conditions
+        # if len(response_text) < MIN_COUNT or response_text in responses:
+        #     break
         
-        #Ease of answering
-        r1 = ease_of_answering(ep_input, lengths, dull_responses, mask, max_target_len, forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio)
+        # Compute sentiment score using infer
+        sentiment_reward = infer(input_var, model, tokenizer)
+
+        # Ease of answering
+        r1 = ease_of_answering(
+            ep_input, lengths, dull_responses, mask, max_target_len,
+            forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio
+        )
         
-        #Information flow
+        # Information flow
         r2 = information_flow(responses)
         
-        #Semantic coherence
-        r3 = semantic_coherence(ep_input, lengths, target_var, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder, batch_size, teacher_forcing_ratio)
+        # Semantic coherence
+        r3 = semantic_coherence(
+            ep_input, lengths, target_var, mask, max_target_len,
+            forward_encoder, forward_decoder, backward_encoder, backward_decoder,
+            batch_size, teacher_forcing_ratio
+        )
         
-        #Final reward as a weighted sum of rewards
-        r = l1*r1 + l2*r2 + l3*r3
+        # Final reward (weighted sum with sentiment)
+        r = l1 * r1 + l2 * r2 + l3 * r3 + l4 * sentiment_reward
         
-        #Add the current reward to the list
+        # Add the reward to the list
         ep_rewards.append(r.detach().cpu().numpy())
         
-        #We can add the response to responses list
+        # Add the response to the list
         curr_response, lengths = convert_response(curr_response, batch_size)
         curr_response = curr_response.to(device)
-        responses.append(curr_response)
+        responses.append(curr_response) 
         
-        #Next input is the current response
+        # Update input and target for the next iteration
         ep_input = curr_response
-        #Next target -> dummy
-        ep_target = torch.zeros(MAX_LENGTH,batch_size,dtype=torch.int64)
-        #ep_target = torch.LongTensor(torch.LongTensor([0] * MAX_LENGTH)).view(-1, 1)
-        ep_target = ep_target.to(device)
+        ep_target = torch.zeros(MAX_LENGTH, batch_size, dtype=torch.int64).to(device)
         
-        #Turn off the teacher forcing  after first iteration -> dummy target
+        # Turn off teacher forcing after the first iteration
         teacher_forcing_ratio = 0
-        ep_num +=1
-        
-    #Take the mean of the episodic rewards
-    return np.mean(ep_rewards) if len(ep_rewards) > 0 else 0 
+        ep_num += 1
+    
+    # Return the mean reward
+    return np.mean(ep_rewards) if len(ep_rewards) > 0 else 0
+
 
 
 def training_rl_loop(model_name, voc, pairs, batch_size, forward_encoder, forward_encoder_optimizer, forward_decoder, forward_decoder_optimizer, backward_encoder, backward_encoder_optimizer, backward_decoder, backward_decoder_optimizer,teacher_forcing_ratio,n_iteration, print_every, save_every, save_dir):
@@ -238,7 +356,9 @@ def training_rl_loop(model_name, voc, pairs, batch_size, forward_encoder, forwar
     # Load batches for each iteration
     training_batches = [batch_2_train_data(voc, [random.choice(pairs) for _ in range(batch_size)])
                       for _ in range(n_iteration)]
-    
+
+    model = load_model()
+    tokenizer = load_tokenizer()
     # Initializations
     print('Initializing ...')
     start_iteration = 1
@@ -265,7 +385,7 @@ def training_rl_loop(model_name, voc, pairs, batch_size, forward_encoder, forwar
         forward_loss, forward_len, _ = rl(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio)
         
         #Calculate reward
-        reward = calculate_rewards(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder, batch_size, teacher_forcing_ratio)
+        reward = calculate_rewards(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder, batch_size, teacher_forcing_ratio, tokenizer,model)
         
         #Update forward seq2seq with loss scaled by reward
         loss = forward_loss * reward

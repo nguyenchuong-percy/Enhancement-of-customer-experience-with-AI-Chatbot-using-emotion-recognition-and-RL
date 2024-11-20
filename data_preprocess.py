@@ -36,7 +36,7 @@ def load_lines(file_name):
     conversations = []
     with open(file_name, 'r', encoding='utf-8') as f:
         for line in f:
-            values = line.split("__eou__")
+            values = line.replace('"','').split("__eou__")
             conversations.append(values)
     return conversations
 
