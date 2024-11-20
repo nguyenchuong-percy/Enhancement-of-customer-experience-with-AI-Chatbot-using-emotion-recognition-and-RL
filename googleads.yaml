@@ -1,0 +1,5 @@
+json_key_file_path: "/.secrets/gcp/trackity.json"
+impersonated_email: chuong.trinh1@tiki.vn
+developer_token: I8KsGoB6iENjaVvYOxs7ew
+use_proto_plus: true
+login_customer_id: 6292393259
