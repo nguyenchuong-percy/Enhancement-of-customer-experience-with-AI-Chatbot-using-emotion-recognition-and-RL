@@ -165,7 +165,7 @@ def ease_of_answering(input_variable, lengths, dull_responses, mask, max_target_
     NS=len(dull_responses)
     r1=0
     for d in dull_responses:
-        d, mask, max_target_len = output_var(d, voc)
+        d, mask, max_target_len = output_var(d.split(" "), voc)
         newD, newMask = transform_tensor_to_same_shape_as(d, input_variable.size())
         #tar, mask, max_target_len = convertTarget(d)
         forward_loss, forward_len, _ = rl(input_variable, lengths, newD, newMask, max_target_len, encoder, decoder, batch_size, teacher_forcing_ratio)
@@ -226,7 +226,11 @@ l2=0.2
 l3=0.35
 l4=0.25
 
-dull_responses = ["i do not know what you are talking about.", "i do not know.", "you do not know.", "you know what i mean.", "i know what you mean.", "you know what i am saying.", "you do not know anything."]
+dull_responses = ['toi khong biet ban dang noi gi',
+ 'toi khong biet',
+ 'ban khong biet',
+ 'ban biet toi dang noi gi',
+ 'ban khong biet gi ca']
 
 MIN_COUNT = 3
 MAX_LENGTH = 15

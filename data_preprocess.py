@@ -4,6 +4,8 @@ import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
 import csv
+from pyvi import ViTokenizer
+from gensim.utils import simple_preprocess
 import random
 import re
 import os
@@ -13,7 +15,9 @@ from io import open
 import itertools
 import math
 import numpy as np
+from unidecode import unidecode
 from scipy.spatial import distance
+
 
 
 USE_CUDA = torch.cuda.is_available()
@@ -48,11 +52,11 @@ def extract_sentence_pairs(conversations):
         # Iterate over all the lines of the conversation
         # We ignore the last line (no answer for it)
         for i in range(len(conversation) - 1):
-            input_line = conversation[i].strip()
-            target_line = conversation[i+1].strip()
+            input_line = ViTokenizer.tokenize(' '.join(simple_preprocess(conversation[i].strip())))
+            target_line = ViTokenizer.tokenize(' '.join(simple_preprocess(conversation[i+1].strip())))
             # Filter wrong samples (if one of the lists is empty)
             if input_line and target_line:
-                qa_pairs.append([input_line, target_line])
+                qa_pairs.append([unidecode(input_line), unidecode(target_line)])
     return qa_pairs
 
 

@@ -21,9 +21,11 @@ SOS_token = 1  # Start-of-sentence token
 EOS_token = 2  # End-of-sentence token
 
 # handle dull_responses now
-DULL_RESPONSES = ["I do not know what you are talking about.", "I do not know.", "You do not know.",
-                  "You know what I mean.", "I know what you mean.", "You know what I am saying.", "You do not know anything."]
-
+DULL_RESPONSES  = ['toi khong biet ban dang noi gi',
+ 'toi khong biet',
+ 'ban khong biet',
+ 'ban biet toi dang noi gi',
+ 'ban khong biet gi ca']
 
 class Voc:
     def __init__(self, name):
@@ -168,7 +170,14 @@ def trim_rare_words(voc, pairs, min_count=3):
 
 
 def indexes_from_sentence(voc, sentence):
-    return [voc.word2index[word] for word in sentence.split(' ')] + [EOS_token]
+    try:
+        # print('sentence:', sentence)
+        # print('voc:', voc)
+        return [voc.word2index[word] for word in sentence.split(' ')] + [EOS_token]
+    except Exception as e:
+        print('KeyError:', e)
+        print('sentence:', sentence)
+        print('voc:', voc)
 
 
 def zero_padding(l, fillvalue=PAD_token):
@@ -200,13 +209,17 @@ def input_var(l, voc):
 
 
 def output_var(l, voc):
-    indexes_batch = [indexes_from_sentence(voc, sentence) for sentence in l]
-    max_target_len = max([len(indexes) for indexes in indexes_batch])
-    pad_list = zero_padding(indexes_batch)
-    mask = binary_matrix(pad_list)
-    mask = torch.BoolTensor(mask)
-    pad_var = torch.LongTensor(pad_list)
-    return pad_var, mask, max_target_len
+    try:
+        indexes_batch = [indexes_from_sentence(voc, sentence) for sentence in l]
+        max_target_len = max([len(indexes) for indexes in indexes_batch])
+        pad_list = zero_padding(indexes_batch)
+        mask = binary_matrix(pad_list)
+        mask = torch.BoolTensor(mask)
+        pad_var = torch.LongTensor(pad_list)
+        return pad_var, mask, max_target_len
+    except:
+        print('l:', l)
+    #     pass
 
 # Returns all items for a given batch of pairs
 
@@ -232,7 +245,7 @@ if __name__ == '__main__':
     voc, pairs = load_prepare_data(corpus, corpus_name, datafile, save_dir)
     # Print some pairs to validate
     print("\npairs:")
-    for pair in pairs[:10]:
+    for pair in pairs[:1000]:
         print(pair)
     pairs = trim_rare_words(voc, pairs, min_count=3)
 
@@ -246,4 +259,3 @@ if __name__ == '__main__':
     print("target_variable:", target_variable)
     print("mask:", mask)
     print("max_target_len:", max_target_len)
-
