@@ -233,7 +233,7 @@ dull_responses = ['toi khong biet ban dang noi gi',
  'ban khong biet gi ca']
 
 MIN_COUNT = 3
-MAX_LENGTH = 15
+MAX_LENGTH = 120
 
 def load_model():
     model = SentimentClassifier(n_classes=7)
@@ -245,11 +245,12 @@ def load_tokenizer():
     tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base", use_fast=False)
     return tokenizer
 
-def infer(input,model, tokenizer, max_len=120):
+def infer(input,model, tokenizer, max_len=MAX_LENGTH):
     text = convert_response_to_text(input, tokenizer)
-    print(f'Text: {text}')
+
     text = ' '.join(simple_preprocess(text))
     text = ViTokenizer.tokenize(text)
+    # print(f'Text: {text}')
 
     encoded_review = tokenizer.encode_plus(
         text,
@@ -277,79 +278,77 @@ def infer(input,model, tokenizer, max_len=120):
     output = model(input_ids, attention_mask)
     _, y_pred = torch.max(output, dim=1)
 
-    print(f'Sentiment: {class_names[y_pred]}')
+    # print(f'Sentiment: {class_names[y_pred]}')
     return emotion_score[class_names[y_pred]]
 
-def calculate_rewards(
-    input_var, lengths, target_var, mask, max_target_len,
-    forward_encoder, forward_decoder, backward_encoder, backward_decoder,
-    batch_size, teacher_forcing_ratio, tokenizer, model):
-    # Rewards per episode
+def calculate_rewards(input_var, lengths, target_var, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder, 
+                      batch_size, teacher_forcing_ratio, model, tokenizer):
+    #rewards per episode
     ep_rewards = []
-    # Episode counter
+    #indice of current episode
     ep_num = 1
-    # List of responses
+    #list of responses
     responses = []
-    # Current input and target
+    #input of current episode
     ep_input = input_var
+    #target of current episode
     ep_target = target_var
     
-    while ep_num <= 10:
-        print(f"Episode: {ep_num}")
+    #ep_num bounded -> to redefine (MEDIUM POST)
+    while (ep_num <= 10):
+        old_response = ep_input
         
-        # Generate current response using the forward model
-        _, _, curr_response = rl(
-            ep_input, lengths, ep_target, mask, max_target_len,
-            forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio
-        )
+        # print(ep_num)
+        #generate current response with the forward model
+        _, _, curr_response = rl(ep_input, lengths, ep_target, mask, max_target_len, forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio)
         
-        # # Convert the response tensor to text for inference
-        # response_text = convert_response_to_text(curr_response, tokenizer)
+        #Break if :
+        # 1 -> dull response
+        # 2 -> response is less than MIN_LENGTH
+        # 3 -> repetition ie curr_response in responses
+        if(len(curr_response) < MIN_COUNT):# or (curr_response in dull_responses) or (curr_response in responses)):
+            break
+        # print('Current response:', curr_response, '----------Old response: \n', old_response)    
+        lst_emotion_score = []
+        for re in curr_response:
+            # print(re)
+            lst_emotion_score.append(infer(re, model, tokenizer, max_len=120))          
+        r4 = np.mean(lst_emotion_score)
+        print('Reward:', r4)
         
-        # # Break conditions
-        # if len(response_text) < MIN_COUNT or response_text in responses:
-        #     break
+        #Ease of answering
+        r1 = ease_of_answering(ep_input, lengths, dull_responses, mask, max_target_len, forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio)
         
-        # Compute sentiment score using infer
-        sentiment_reward = infer(input_var, model, tokenizer)
-
-        # Ease of answering
-        r1 = ease_of_answering(
-            ep_input, lengths, dull_responses, mask, max_target_len,
-            forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio
-        )
-        
-        # Information flow
+        #Information flow
         r2 = information_flow(responses)
         
-        # Semantic coherence
-        r3 = semantic_coherence(
-            ep_input, lengths, target_var, mask, max_target_len,
-            forward_encoder, forward_decoder, backward_encoder, backward_decoder,
-            batch_size, teacher_forcing_ratio
-        )
+        #Semantic coherence
+        r3 = semantic_coherence(ep_input, lengths, target_var, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder, batch_size, teacher_forcing_ratio)
         
-        # Final reward (weighted sum with sentiment)
-        r = l1 * r1 + l2 * r2 + l3 * r3 + l4 * sentiment_reward
+        #Final reward as a weighted sum of rewards
+        r = l1*r1 + l2*r2 + l3*r3 + 0.25*r4
         
-        # Add the reward to the list
+        #Add the current reward to the list
         ep_rewards.append(r.detach().cpu().numpy())
         
-        # Add the response to the list
+        #We can add the response to responses list
         curr_response, lengths = convert_response(curr_response, batch_size)
         curr_response = curr_response.to(device)
-        responses.append(curr_response) 
+        responses.append(curr_response)
         
-        # Update input and target for the next iteration
+        #Next input is the current response
         ep_input = curr_response
-        ep_target = torch.zeros(MAX_LENGTH, batch_size, dtype=torch.int64).to(device)
+        #Next target -> dummy
+        ep_target = torch.zeros(MAX_LENGTH,batch_size,dtype=torch.int64)
+        #ep_target = torch.LongTensor(torch.LongTensor([0] * MAX_LENGTH)).view(-1, 1)
+        ep_target = ep_target.to(device)
         
-        # Turn off teacher forcing after the first iteration
+        #Turn off the teacher forcing  after first iteration -> dummy target
         teacher_forcing_ratio = 0
-        ep_num += 1
-    
-    # Return the mean reward
-    return np.mean(ep_rewards) if len(ep_rewards) > 0 else 0
+        ep_num +=1
+        
+    #Take the mean of the episodic rewards
+    return np.mean(ep_rewards) if len(ep_rewards) > 0 else 0 
 
 
 
@@ -389,7 +388,8 @@ def training_rl_loop(model_name, voc, pairs, batch_size, forward_encoder, forwar
         forward_loss, forward_len, _ = rl(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio)
         
         #Calculate reward
-        reward = calculate_rewards(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder, batch_size, teacher_forcing_ratio, tokenizer,model)
+        reward = calculate_rewards(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder,
+                                    batch_size, teacher_forcing_ratio, model,tokenizer)
         
         #Update forward seq2seq with loss scaled by reward
         loss = forward_loss * reward
