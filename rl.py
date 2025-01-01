@@ -385,7 +385,7 @@ def training_rl_loop(model_name, voc, pairs, batch_size, forward_encoder, forwar
         backward_decoder_optimizer.zero_grad()
         
         #Forward
-        forward_loss, forward_len, _ = rl(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio)
+        forward_loss, forward_len, responses = rl(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, batch_size, teacher_forcing_ratio)
         
         #Calculate reward
         reward = calculate_rewards(input_variable, lengths, target_variable, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder,
@@ -400,12 +400,27 @@ def training_rl_loop(model_name, voc, pairs, batch_size, forward_encoder, forwar
 
         # Run a training iteration with batch
         print_loss += loss / forward_len
+
+                # Prepare references and hypotheses for BLEU and ROUGE
+        references = [" ".join(target_variable[:, i].tolist()) for i in range(target_variable.size(1))]
+        hypotheses = [" ".join(response) for response in responses]
+
+        # Calculate BLEU and ROUGE metrics
+        bleu_score = calculate_bleu(references, hypotheses)
+        rouge_scores = calculate_rouge(references, hypotheses)
+
+        results_dir = "results"
+        os.makedirs(results_dir, exist_ok=True)
+        results_file = os.path.join(results_dir, "training_scores.csv")
         
         # Print progress
         if iteration % print_every == 0:
             print_loss_avg = print_loss / print_every
             print("Iteration: {}; Percent complete: {:.1f}%; Average loss: {:.4f}".format(iteration, iteration / n_iteration * 100, print_loss_avg))
+            print(f"Iteration: {iteration}; Percent complete: {iteration / n_iteration * 100:.1f}%; Average loss: {print_loss_avg:.4f}")
+            print(f"BLEU: {bleu_score:.4f}, ROUGE-1: {rouge_scores['rouge1']:.4f}, ROUGE-2: {rouge_scores['rouge2']:.4f}, ROUGE-L: {rouge_scores['rougeL']:.4f}")
             print_loss = 0
+            save_scores_to_csv(results_file, iteration, bleu_score, rouge_scores)
             
         #SAVE CHECKPOINT TO DO
         if (iteration % save_every == 0):
