@@ -18,6 +18,8 @@ from scipy.spatial import distance
 from loss import mask_nll_loss
 from seq2seq import *
 from dataloading import *
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from rouge_score import rouge_scorer
 
 
 def convert_response(response, batch_size):
@@ -75,3 +77,71 @@ def transform_tensor_to_same_shape_as(tensor, shape):
             np_new_t[i][j] = tensor[i][j]
             np_new_mask[i][j] = True
     return torch.from_numpy(np_new_t), torch.from_numpy(np_new_mask)
+
+
+def calculate_bleu(references, hypotheses):
+    """
+    Calculate BLEU score for a set of references and hypotheses.
+
+    Args:
+        references (list of list of str): List of reference texts (each as a list of words).
+        hypotheses (list of str): List of hypothesis texts (each as a single string).
+
+    Returns:
+        float: Average BLEU score for all pairs of references and hypotheses.
+    """
+    smooth = SmoothingFunction().method1
+    bleu_scores = []
+    for ref, hyp in zip(references, hypotheses):
+        ref_tokens = [ref.split()]
+        hyp_tokens = hyp.split()
+        score = sentence_bleu(ref_tokens, hyp_tokens, smoothing_function=smooth)
+        bleu_scores.append(score)
+    return sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0
+
+def calculate_rouge(references, hypotheses):
+    """
+    Calculate ROUGE scores for a set of references and hypotheses.
+
+    Args:
+        references (list of str): List of reference texts.
+        hypotheses (list of str): List of hypothesis texts.
+
+    Returns:
+        dict: Average ROUGE scores (ROUGE-1, ROUGE-2, ROUGE-L) for all pairs of references and hypotheses.
+    """
+    scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+    rouge_scores = {"rouge1": [], "rouge2": [], "rougeL": []}
+
+    for ref, hyp in zip(references, hypotheses):
+        scores = scorer.score(ref, hyp)
+        for key in rouge_scores:
+            rouge_scores[key].append(scores[key].fmeasure)
+
+    return {key: sum(scores) / len(scores) if scores else 0 for key, scores in rouge_scores.items()}
+
+import os
+import csv
+
+def save_scores_to_csv(file_path, iteration, bleu_score, rouge_scores):
+    # Check if file exists
+    file_exists = os.path.isfile(file_path)
+    
+    # Open file in append mode
+    with open(file_path, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        
+        # Write header if the file doesn't exist
+        if not file_exists:
+            writer.writerow(["Iteration", "BLEU", "ROUGE-1", "ROUGE-2", "ROUGE-L"])
+        
+        # Write the current scores
+        writer.writerow([
+            iteration,
+            bleu_score,
+            rouge_scores['rouge1'],
+            rouge_scores['rouge2'],
+            rouge_scores['rougeL']
+        ])
+
+
