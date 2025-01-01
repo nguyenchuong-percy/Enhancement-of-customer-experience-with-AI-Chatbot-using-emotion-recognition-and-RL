@@ -35,7 +35,7 @@ def test_kfold(inp, lengths, output, mask, max_target_len, n_splits = 3):
     for fold in range(n_splits):
         model = SentimentClassifier(n_classes=7)
         model.to(device)
-        model.load_state_dict(torch.load(f'phobert_fold{fold+1}.pth'))
+        model.load_state_dict(torch.load(f'./bert_model/bert_fold{fold+1}.pth'))
         model.eval()
         models.append(model)
 
@@ -238,7 +238,7 @@ MAX_LENGTH = 120
 def load_model():
     model = SentimentClassifier(n_classes=7)
     model.to(device)
-    model.load_state_dict(torch.load(f'./bert_model/phobert_fold1.pth',map_location=device))
+    model.load_state_dict(torch.load(f'./bert_model/bert_fold1.pth',map_location=device))
     return model
 
 def load_tokenizer():

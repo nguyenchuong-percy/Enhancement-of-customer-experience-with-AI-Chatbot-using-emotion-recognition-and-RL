@@ -20,7 +20,7 @@ from transformers import get_linear_schedule_with_warmup, AutoTokenizer, AutoMod
 class SentimentClassifier(nn.Module):
     def __init__(self, n_classes):
         super(SentimentClassifier, self).__init__()
-        self.bert = AutoModel.from_pretrained("vinai/phobert-base")
+        self.bert = AutoModel.from_pretrained("bert-base-uncased")
         self.drop = nn.Dropout(p=0.3)
         self.fc = nn.Linear(self.bert.config.hidden_size, n_classes)
         nn.init.normal_(self.fc.weight, std=0.02)

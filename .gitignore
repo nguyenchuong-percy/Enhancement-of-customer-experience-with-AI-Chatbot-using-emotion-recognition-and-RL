@@ -76,11 +76,11 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-
+data/
 # IPython
 profile_default/
 ipython_config.py
-
+emotion_model/data/
 # pyenv
 .python-version
 bert_model/
