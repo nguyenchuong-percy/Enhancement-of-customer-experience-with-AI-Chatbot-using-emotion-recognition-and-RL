@@ -263,23 +263,28 @@ def infer(input,model, tokenizer, max_len=MAX_LENGTH):
         return_tensors='pt',
     )
     emotion_score = {
-    'Other': 0,            # Neutral or unclassified emotion
-    'Disgust': -0.7,       # Strong negative emotion
-    'Enjoyment': 0.8,      # Positive emotion
-    'Anger': -1,           # Strong negative emotion
-    'Surprise': 0.5,       # Neutral to positive, could go either way depending on context
-    'Sadness': -0.8,       # Negative emotion
-    'Fear': -0.6           # Negative emotion
-      }
+    "Other": 0.0,
+    "Disgust": -0.7,
+    "Neutral": 0.2,
+    "Anger": -1.0,
+    "Surprise": 0.5,
+    "Sadness": -0.8,
+    "Fear": -0.6,
+    "Trust": 0.6,
+    "Anticipation": 0.4,
+    "Joy": 1.0
+}
     class_names = list(emotion_score.keys())
     input_ids = encoded_review['input_ids'].to(device)
     attention_mask = encoded_review['attention_mask'].to(device)
 
     output = model(input_ids, attention_mask)
     _, y_pred = torch.max(output, dim=1)
+    probabilities = torch.softmax(output, dim=1).cpu().detach().numpy().flatten()
+    reward_score = sum(probabilities[i] * emotion_score[class_names[i]] for i in range(len(class_names)))
 
     # print(f'Sentiment: {class_names[y_pred]}')
-    return emotion_score[class_names[y_pred]]
+    return reward_score
 
 def calculate_rewards(input_var, lengths, target_var, mask, max_target_len, forward_encoder, forward_decoder, backward_encoder, backward_decoder, 
                       batch_size, teacher_forcing_ratio, model, tokenizer):
